@@ -5,7 +5,6 @@ from torch.nn import functional as F
 from utils import get_data_loader
 import copy
 import numpy as np
-from models.cl.fromp_optimizer import softmax_hessian
 
 
 class MemoryBuffer(nn.Module, metaclass=abc.ABCMeta):
@@ -49,7 +48,7 @@ class MemoryBuffer(nn.Module, metaclass=abc.ABCMeta):
             self.memory_sets[y] = P_y[:m]
 
     def construct_memory_set(self, dataset, n, label_set):
-        '''Construct memory set of [n] examples from [dataset] using 'herding', 'random' or 'fromp' selection.
+        '''Construct memory set of [n] examples from [dataset] using 'herding' or 'random' selection.
 
         Note that [dataset] should be from specific class; selected sets are added to [self.memory_sets] in order.'''
 
@@ -60,35 +59,7 @@ class MemoryBuffer(nn.Module, metaclass=abc.ABCMeta):
         n_max = len(dataset)
         memory_set = []
 
-        if self.sample_selection=="fromp":
-            first_entry = True
-
-            # Loop over all samples in the dataset
-            dataloader = get_data_loader(dataset, 128, cuda=self._is_on_cuda())
-            for i, dt in enumerate(dataloader):
-                # Compute for each sample its "importance score"
-                data, _ = dt
-                f = self.forward(data.to(self._device()))
-                lamb = softmax_hessian(f if label_set is None else f[:,label_set])
-                lamb = torch.sum(lamb.cpu(), dim=-1).detach()
-
-                # Store both the samples and their computed scores
-                if first_entry:
-                    memorable_points = data
-                    scores = lamb
-                    first_entry = False
-                else:
-                    memorable_points = torch.cat([memorable_points, data], dim=0)
-                    scores = torch.cat([scores, lamb], dim=0)
-
-            # Select the samples with the best (or worst) scores, and store them in the memory buffer
-            if len(memorable_points) > n:
-                _, indices = scores.sort(descending=True)
-                memorable_points = memorable_points[indices[:n]]
-            # -add this [memory_set] as a [n]x[ich]x[isz]x[isz] to the list of [memory_sets]
-            self.memory_sets.append(memorable_points.numpy())
-
-        elif self.sample_selection=="herding":
+        if self.sample_selection == "herding":
             # Compute features for each example in [dataset]
             first_entry = True
             dataloader = get_data_loader(dataset, 128, cuda=self._is_on_cuda())
@@ -113,9 +84,9 @@ class MemoryBuffer(nn.Module, metaclass=abc.ABCMeta):
             selected_features = torch.zeros_like(features[:min(n, n_max)])
             list_of_selected = []
             for k in range(min(n, n_max)):
-                if k>0:
+                if k > 0:
                     selected_samples_sum = torch.sum(selected_features[:k], dim=0).unsqueeze(0)
-                    features_means = (features + selected_samples_sum)/(k+1)
+                    features_means = (features + selected_samples_sum) / (k + 1)
                     features_dists = features_means - class_mean
                 else:
                     features_dists = features - class_mean
@@ -204,4 +175,3 @@ class MemoryBuffer(nn.Module, metaclass=abc.ABCMeta):
         self.train(mode=mode)
 
         return scores
-

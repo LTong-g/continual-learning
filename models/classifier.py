@@ -6,7 +6,6 @@ from models.conv.nets import ConvLayers
 from models.cl.memory_buffer import MemoryBuffer
 from models.cl.continual_learner import ContinualLearner
 from models.utils import loss_functions as lf, modules
-from models.utils.ncl import additive_nearest_kf
 
 
 class Classifier(ContinualLearner, MemoryBuffer):
@@ -291,10 +290,7 @@ class Classifier(ContinualLearner, MemoryBuffer):
             if self.importance_weighting=='si':
                 weight_penalty_loss = self.surrogate_loss()
             elif self.importance_weighting=='fisher':
-                if self.fisher_kfac:
-                    weight_penalty_loss = self.ewc_kfac_loss()
-                else:
-                    weight_penalty_loss = self.ewc_loss()
+                weight_penalty_loss = self.ewc_loss()
             loss_total += self.reg_strength * weight_penalty_loss
 
 
@@ -328,7 +324,7 @@ class Classifier(ContinualLearner, MemoryBuffer):
         # Precondition gradient of current data using projection matrix constructed from parameter importance estimates
         if self.precondition:
 
-            if self.importance_weighting=='fisher' and not self.fisher_kfac:
+            if self.importance_weighting=='fisher':
                 if self.context_count>0:
                     #--> scale gradients by inverse diagonal Fisher
                     for gen_params in self.param_list:
@@ -342,76 +338,6 @@ class Classifier(ContinualLearner, MemoryBuffer):
                                 p.grad *= scale  # scale lr by inverse prior information
                                 if self.data_size is not None:
                                     p.grad /= self.data_size  # scale lr by prior (necessary for stability in 1st context)
-
-            elif self.importance_weighting=='fisher' and self.fisher_kfac:
-                #--> scale gradients by inverse Fisher kronecker factors
-                def scale_grad(label, layer):
-                    assert isinstance(layer, fc_layer)
-                    info = self.KFAC_FISHER_INFO[label]  # get previous KFAC fisher
-                    A = info["A"].to(self._device())
-                    G = info["G"].to(self._device())
-                    linear = layer.linear
-                    if linear.bias is not None:
-                        g = torch.cat( (linear.weight.grad, linear.bias.grad[..., None]), -1).clone()
-                    else:
-                        g = layer.linear.weight.grad.clone()
-
-                    assert g.shape[-1] == A.shape[-1]
-                    assert g.shape[-2] == G.shape[-2]
-                    iA = torch.eye(A.shape[0]).to(self._device()) * (self.alpha)
-                    iG = torch.eye(G.shape[0]).to(self._device()) * (self.alpha)
-
-                    As, Gs = additive_nearest_kf({"A": A, "G": G}, {"A": iA, "G": iG})  # kronecker sums
-                    Ainv = torch.inverse(As)
-                    Ginv = torch.inverse(Gs)
-
-                    scaled_g = Ginv @ g @ Ainv
-                    if linear.bias is not None:
-                        linear.weight.grad = scaled_g[..., 0:-1].detach() / self.data_size
-                        linear.bias.grad = scaled_g[..., -1].detach() / self.data_size
-                    else:
-                        linear.weight.grad = scaled_g[..., 0:-1, :] / self.data_size
-
-                    # make sure to reset all phantom to have no zeros
-                    if not hasattr(layer, 'phantom'):
-                        raise ValueError(f"Layer {label} does not have phantom parameters")
-                    # make sure phantom stays zero
-                    layer.phantom.grad.zero_()
-                    layer.phantom.data.zero_()
-
-                scale_grad("classifier", self.classifier)
-                for i in range(1, self.fcE.layers + 1):
-                    label = f"fcLayer{i}"
-                    scale_grad(label, getattr(self.fcE, label))
-
-            elif self.importance_weighting=='owm' and context>1:
-                def scale_grad(label, layer):
-                    info = self.KFAC_FISHER_INFO[label]  # get previous KFAC fisher
-                    A = info['A'].to(self._device())
-
-                    linear = layer.linear
-                    if linear.bias is not None:
-                        g = torch.cat((linear.weight.grad, linear.bias.grad[..., None]), -1).clone()
-                    else:
-                        g = layer.linear.weight.grad.clone()
-
-                    assert (g.shape[-1] == A.shape[-1])
-                    iA = torch.eye(A.shape[0]).to(self._device())  # * (self.alpha)
-                    As = A / self.alpha + iA
-                    Ainv = torch.inverse(As)
-                    scaled_g = g @ Ainv
-
-                    if linear.bias is not None:
-                        linear.weight.grad = scaled_g[..., 0:-1].detach()
-                        linear.bias.grad = scaled_g[..., -1].detach()
-                    else:
-                        linear.weight.grad = scaled_g[..., 0:-1, :]
-
-                scale_grad('classifier', self.classifier)
-                for i in range(1, self.fcE.layers + 1):
-                    label = f"fcLayer{i}"
-                    scale_grad(label, getattr(self.fcE, label))
-
 
         ##--(5)-- TAKE THE OPTIMIZATION STEP --##
         self.optimizer.step()
@@ -428,4 +354,3 @@ class Classifier(ContinualLearner, MemoryBuffer):
             'param_reg': weight_penalty_loss.item() if weight_penalty_loss is not None else 0,
             'accuracy': accuracy if accuracy is not None else 0.,
         }
-
