@@ -3,57 +3,15 @@ from utils import checkattr
 
 ##-------------------------------------------------------------------------------------------------------------------##
 
-def define_classifier(args, config, device, depth=0, stream=False):
-    if checkattr(args, 'separate_networks'):
-        model = define_separate_classifiers(args=args, config=config, device=device, depth=depth)
-    elif checkattr(args, 'feedback'):
+def define_classifier(args, config, device, depth=0):
+    if checkattr(args, 'feedback'):
         model = define_rtf_classifier(args=args, config=config, device=device, depth=depth)
     elif checkattr(args, 'gen_classifier'):
         model = define_generative_classifer(args=args, config=config, device=device, depth=depth)
-    elif stream:
-        model = define_stream_classifier(args=args, config=config, device=device, depth=depth)
     else:
         model = define_standard_classifier(args=args, config=config, device=device, depth=depth)
     return model
 
-
-##-------------------------------------------------------------------------------------------------------------------##
-
-## Function for defining discriminative classifier model
-def define_stream_classifier(args, config, device, depth=0):
-    # Import required model
-    from models.classifier_stream import Classifier
-    # Specify model
-    model = Classifier(
-        image_size=config['size'],
-        image_channels=config['channels'],
-        classes=config['output_units'],
-        # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth > 0 else None,
-        start_channels=args.channels if depth > 0 else None,
-        reducing_layers=args.rl if depth > 0 else None,
-        num_blocks=args.n_blocks if depth > 0 else None,
-        conv_bn=(True if args.conv_bn == "yes" else False) if depth > 0 else None,
-        conv_nl=args.conv_nl if depth > 0 else None,
-        no_fnl=True if depth > 0 else None,
-        global_pooling=checkattr(args, 'gp') if depth > 0 else None,
-        # -fc-layers
-        fc_layers=args.fc_lay,
-        fc_units=args.fc_units,
-        fc_drop=args.fc_drop,
-        fc_bn=True if args.fc_bn == "yes" else False,
-        fc_nl=args.fc_nl,
-        excit_buffer=True,
-        phantom=checkattr(args, 'fisher_kfac'),
-        # -how to use context-ID
-        xdg_prob=args.gating_prop if checkattr(args, 'xdg') else 0.,
-        n_contexts=args.contexts,
-        multihead=((args.scenario=='task') and not checkattr(args, 'singlehead')),
-        device=device
-    ).to(device)
-    # Return model
-    return model
 
 ##-------------------------------------------------------------------------------------------------------------------##
 
@@ -125,47 +83,13 @@ def define_rtf_classifier(args, config, device, depth=0):
         network_output="none" if checkattr(args, "normalize") else "sigmoid",
         deconv_type=args.deconv_type if hasattr(args, "deconv_type") else "standard",
         dg_gates=checkattr(args, 'dg_gates'),
-        dg_type=args.dg_type if hasattr(args, 'dg_type') else "context",
         dg_prop=args.dg_prop if hasattr(args, 'dg_prop') else 0.,
-        contexts=args.contexts if hasattr(args, 'contexts') else None,
-        scenario=args.scenario if hasattr(args, 'scenario') else None, device=device,
         # -classifier
         classifier=True,
     ).to(device)
     # -return model
     return model
 
-##-------------------------------------------------------------------------------------------------------------------##
-
-## Function for defining classifier model with separate network per context
-def define_separate_classifiers(args, config, device, depth=0):
-    # Import required model
-    from models.separate_classifiers import SeparateClassifiers
-    # Specify model
-    model = SeparateClassifiers(
-        image_size=config['size'],
-        image_channels=config['channels'],
-        classes_per_context=config['classes_per_context'],
-        contexts=args.contexts,
-        # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth>0 else None,
-        start_channels=args.channels if depth>0 else None,
-        reducing_layers=args.rl if depth>0 else None,
-        num_blocks=args.n_blocks if depth>0 else None,
-        conv_bn=(True if args.conv_bn=="yes" else False) if depth>0 else None,
-        conv_nl=args.conv_nl if depth>0 else None,
-        no_fnl=True if depth>0 else None,
-        global_pooling=checkattr(args, 'gp') if depth>0 else None,
-        # -fc-layers
-        fc_layers=args.fc_lay,
-        fc_units=args.fc_units,
-        fc_drop=args.fc_drop,
-        fc_bn=True if args.fc_bn=="yes" else False,
-        fc_nl=args.fc_nl,
-        excit_buffer=True,
-    ).to(device)
-    return model
 
 ##-------------------------------------------------------------------------------------------------------------------##
 

@@ -23,7 +23,7 @@ class CondVAE(ContinualLearner):
                  prior="standard", z_dim=20, per_class=False, n_modes=1,
                  # -decoder
                  recon_loss='BCE', network_output="sigmoid", deconv_type="standard",
-                 dg_gates=False, dg_type="context", dg_prop=0., contexts=5, scenario="task", device='cuda',
+                 dg_gates=False, dg_prop=0., device='cuda',
                  # -classifer
                  classifier=True, **kwargs):
         '''Class for variational auto-encoder (VAE) models.'''
@@ -43,11 +43,9 @@ class CondVAE(ContinualLearner):
         self.recon_loss = recon_loss # options: BCE|MSE
         self.network_output = network_output
         # -settings for class- or context-specific gates in fully-connected hidden layers of decoder
-        self.dg_type = dg_type
         self.dg_prop = dg_prop
         self.dg_gates = dg_gates if (dg_prop is not None) and dg_prop>0. else False
-        self.gate_size = (contexts if dg_type=="context" else classes) if self.dg_gates else 0
-        self.scenario = scenario
+        self.gate_size = classes if self.dg_gates else 0
 
         # Optimizer (needs to be set before training starts))
         self.optimizer = None
@@ -153,7 +151,7 @@ class CondVAE(ContinualLearner):
             self.prior, self.n_modes, "pc" if self.per_class else ""
         ))
         class_label = "-c{}".format(self.classes) if hasattr(self, "classifier") else ""
-        decoder_label = "_{}{}".format("tg" if self.dg_type=="context" else "cg", self.dg_prop) if self.dg_gates else ""
+        decoder_label = "_{}{}".format("cg", self.dg_prop) if self.dg_gates else ""
         return "{}={}{}{}{}{}".format(self.label, convE_label, fcE_label, z_label, class_label, decoder_label)
 
     @property
@@ -273,19 +271,16 @@ class CondVAE(ContinualLearner):
 
     ##------ SAMPLE FUNCTIONS --------##
 
-    def sample(self, size, allowed_classes=None, class_probs=None, sample_mode=None, allowed_domains=None,
-               only_x=True, **kwargs):
+    def sample(self, size, allowed_classes=None, class_probs=None, sample_mode=None, only_x=True, **kwargs):
         '''Generate [size] samples from the model. Outputs are tensors (not "requiring grad"), on same device as <self>.
 
         INPUT:  - [allowed_classes]     <list> of [class_ids] from which to sample
                 - [class_probs]         <list> with for each class the probability it is sampled from it
                 - [sample_mode]         <int> to sample from specific mode of [z]-distr'n, overwrites [allowed_classes]
-                - [allowed_domains]     <list> of [context_ids] which are allowed to be used for 'context-gates' (if used)
-                                          NOTE: currently only relevant if [scenario]=="domain"
 
         OUTPUT: - [X]         <4D-tensor> generated images / image-features
                 - [y_used]    <ndarray> labels of classes intended to be sampled  (using <class_ids>)
-                - [context_used] <ndarray> labels of domains/contexts used for context-gates in decoder'''
+                - [context_used] <ndarray> always None in CI-only build'''
 
         # set model to eval()-mode
         self.eval()
@@ -340,25 +335,13 @@ class CondVAE(ContinualLearner):
                 if allowed_classes is None:
                     allowed_classes = [i for i in range(len(class_probs))]
                 y_used = np.random.choice(allowed_classes, size, p=class_probs, replace=True)
-        # if gates in the decoder are "context-gates", convert [y_used] to corresponding contexts (if Task-/Class-IL)
-        #   or simply sample which contexts should be generated (if Domain-IL) from [allowed_domains]
-        context_used = None
-        if self.dg_gates and self.dg_type=="context":
-            if self.scenario=="domain":
-                context_used = np.random.randint(0,self.gate_size,size) if (
-                        allowed_domains is None
-                ) else np.random.choice(allowed_domains, size, replace=True)
-            else:
-                classes_per_context = int(self.classes/self.gate_size)
-                context_used = np.array([int(class_id / classes_per_context) for class_id in y_used])
 
         # decode z into image X
         with torch.no_grad():
-            X = self.decode(z,
-                            gate_input=(context_used if self.dg_type=="context" else y_used) if self.dg_gates else None)
+            X = self.decode(z, gate_input=y_used if self.dg_gates else None)
 
         # return samples as [batch_size]x[channels]x[image_size]x[image_size] tensor, plus requested additional info
-        return X if only_x else (X, y_used, context_used)
+        return X if only_x else (X, y_used, None)
 
 
 
@@ -561,8 +544,8 @@ class CondVAE(ContinualLearner):
 
     ##------ TRAINING FUNCTIONS --------##
 
-    def train_a_batch(self, x, y=None, x_=None, y_=None, scores_=None, contexts_=None, rnt=0.5,
-                      active_classes=None, context=1, **kwargs):
+    def train_a_batch(self, x, y=None, x_=None, y_=None, scores_=None, rnt=0.5,
+                      active_classes=None, **kwargs):
         '''Train model for one batch ([x],[y]), possibly supplemented with replayed data ([x_],[y_]).
 
         [x]                 <tensor> batch of inputs (could be None, in which case only 'replayed' data is used)
@@ -570,10 +553,8 @@ class CondVAE(ContinualLearner):
         [x_]                None or (<list> of) <tensor> batch of replayed inputs
         [y_]                None or (<list> of) <1Dtensor>:[batch] of corresponding "replayed" labels
         [scores_]           None or (<list> of) <2Dtensor>:[batch]x[classes] target "scores"/"logits" for [x_]
-        [contexts_]         None or (<list> of) <1Dtensor>/<ndarray>:[batch] of context-IDs of replayed samples (as <int>)
         [rnt]               <number> in [0,1], relative importance of new context
-        [active_classes]    None or (<list> of) <list> with "active" classes
-        [context]           <int>, for setting context-specific mask'''
+        [active_classes]    None or (<list> of) <list> with "active" classes'''
 
         # Set model to training-mode
         self.train()
@@ -590,19 +571,14 @@ class CondVAE(ContinualLearner):
         ##--(1)-- CURRENT DATA --##
         accuracy = 0.
         if x is not None:
-            # If using context-gates, create [context_tensor] as it's needed in the decoder
-            context_tensor = None
-            if self.dg_gates and self.dg_type=="context":
-                context_tensor = torch.tensor(np.repeat(context-1, x.size(0))).to(self._device())
-
             # Run the model
             recon_batch, y_hat, mu, logvar, z = self(
-                x, gate_input=(context_tensor if self.dg_type=="context" else y) if self.dg_gates else None, full=True,
+                x, gate_input=y if self.dg_gates else None, full=True,
                 reparameterize=True
             )
             # --if needed, remove predictions for classes not active in the current context
             if active_classes is not None:
-                class_entries = active_classes[-1] if type(active_classes[0])==list else active_classes
+                class_entries = active_classes
                 if y_hat is not None:
                     y_hat = y_hat[:, class_entries]
 
@@ -622,93 +598,44 @@ class CondVAE(ContinualLearner):
 
 
         ##--(2)-- REPLAYED DATA --##
+        loss_replay = None
+        reconL_r = variatL_r = predL_r = distilL_r = None
+
         if x_ is not None:
-            # If there are different predictions per context, [y_] or [scores_] are lists and [x_] must be evaluated
-            # separately on each of them (although [x_] could be a list as well!)
-            PerContext = (type(y_)==list) if (y_ is not None) else (type(scores_)==list)
-            if not PerContext:
-                y_ = [y_]
-                scores_ = [scores_]
-                active_classes = [active_classes] if (active_classes is not None) else None
-            n_replays = len(y_) if (y_ is not None) else len(scores_)
+            # If needed in the decoder-gates, find class-tensor [y_predicted] for replay
+            y_predicted = None
+            if self.dg_gates:
+                if y_ is not None:
+                    y_predicted = y_
+                else:
+                    y_predicted = F.softmax(scores_ / self.KD_temp, dim=1)
+                    if y_predicted.size(1) < self.classes:
+                        n_batch = y_predicted.size(0)
+                        zeros_to_add = torch.zeros(n_batch, self.classes - y_predicted.size(1)).to(self._device())
+                        y_predicted = torch.cat([y_predicted, zeros_to_add], dim=1)
 
-            # Prepare lists to store losses for each replay
-            loss_replay = [torch.tensor(0., device=self._device())]*n_replays
-            reconL_r = [torch.tensor(0., device=self._device())]*n_replays
-            variatL_r = [torch.tensor(0., device=self._device())]*n_replays
-            predL_r = [torch.tensor(0., device=self._device())]*n_replays
-            distilL_r = [torch.tensor(0., device=self._device())]*n_replays
+            gate_input = y_predicted if self.dg_gates else None
 
-            # Run model (if [x_] is not a list with separate replay per context and there is no context-specific mask)
-            if (not type(x_)==list) and (not (self.dg_gates and PerContext)):
-                # -if needed in the decoder-gates, find class-tensor [y_predicted]
-                y_predicted = None
-                if self.dg_gates and self.dg_type=="class":
-                    if y_[0] is not None:
-                        y_predicted = y_[0]
-                    else:
-                        y_predicted = F.softmax(scores_[0] / self.KD_temp, dim=1)
-                        if y_predicted.size(1) < self.classes:
-                            # in case of Class-IL, add zeros at the end:
-                            n_batch = y_predicted.size(0)
-                            zeros_to_add = torch.zeros(n_batch, self.classes - y_predicted.size(1))
-                            zeros_to_add = zeros_to_add.to(self._device())
-                            y_predicted = torch.cat([y_predicted, zeros_to_add], dim=1)
-                # -run full model
-                x_temp_ = x_
-                gate_input = (contexts_ if self.dg_type=="context" else y_predicted) if self.dg_gates else None
-                recon_batch, y_hat_all, mu, logvar, z = self(x_temp_, gate_input=gate_input, full=True)
+            recon_batch, y_hat_all, mu, logvar, z = self(x_, gate_input=gate_input, full=True)
 
-            # Loop to perform each replay
-            for replay_id in range(n_replays):
-                # -if [x_] is a list with separate replay per context, evaluate model on this context's replay
-                if (type(x_)==list) or (PerContext and self.dg_gates):
-                    # -if needed in the decoder-gates, find class-tensor [y_predicted]
-                    y_predicted = None
-                    if self.dg_gates and self.dg_type == "class":
-                        if y_ is not None and y_[replay_id] is not None:
-                            y_predicted = y_[replay_id]
-                            # because of Task-IL, increase class-ID with number of classes before context being replayed
-                            y_predicted = y_predicted + replay_id*len(active_classes[0])
-                        else:
-                            y_predicted = F.softmax(scores_[replay_id] / self.KD_temp, dim=1)
-                            if y_predicted.size(1) < self.classes:
-                                # in case of Task-IL, add zeros before and after:
-                                n_batch = y_predicted.size(0)
-                                zeros_to_add_before = torch.zeros(n_batch, replay_id*y_predicted.size(1))
-                                zeros_to_add_before = zeros_to_add_before.to(self._device())
-                                zeros_to_add_after = torch.zeros(n_batch,self.classes-(replay_id+1)*y_predicted.size(1))
-                                zeros_to_add_after = zeros_to_add_after.to(self._device())
-                                y_predicted = torch.cat([zeros_to_add_before, y_predicted, zeros_to_add_after], dim=1)
-                    # -run full model
-                    x_temp_ = x_[replay_id] if type(x_)==list else x_
-                    gate_input = (
-                        contexts_[replay_id] if self.dg_type=="context" else y_predicted
-                    ) if self.dg_gates else None
-                    recon_batch, y_hat_all, mu, logvar, z = self(x_temp_, full=True, gate_input=gate_input)
+            # --if needed, remove predictions for classes not active in the replayed batch
+            y_hat = y_hat_all if (active_classes is None or y_hat_all is None) else y_hat_all[:, active_classes]
 
-                # --if needed, remove predictions for classes not active in the replayed context
-                y_hat = y_hat_all if (
-                        active_classes is None or y_hat_all is None
-                ) else y_hat_all[:, active_classes[replay_id]]
+            reconL_r, variatL_r, predL_r, distilL_r = self.loss_function(
+                x=x_, y=y_ if (y_ is not None) else None, x_recon=recon_batch, y_hat=y_hat,
+                scores=scores_ if (scores_ is not None) else None, mu=mu, z=z, logvar=logvar,
+                allowed_classes=active_classes if active_classes is not None else None,
+            )
 
-                # Calculate all losses
-                reconL_r[replay_id],variatL_r[replay_id],predL_r[replay_id],distilL_r[replay_id] = self.loss_function(
-                    x=x_temp_, y=y_[replay_id] if (y_ is not None) else None, x_recon=recon_batch, y_hat=y_hat,
-                    scores=scores_[replay_id] if (scores_ is not None) else None, mu=mu, z=z, logvar=logvar,
-                    allowed_classes=active_classes[replay_id] if active_classes is not None else None,
-                )
-
-                # Weigh losses as requested
-                loss_replay[replay_id] = self.lamda_rcl*reconL_r[replay_id] + self.lamda_vl*variatL_r[replay_id]
-                if self.replay_targets=="hard":
-                    loss_replay[replay_id] += self.lamda_pl*predL_r[replay_id]
-                elif self.replay_targets=="soft":
-                    loss_replay[replay_id] += self.lamda_pl*distilL_r[replay_id]
+            loss_replay = self.lamda_rcl * reconL_r + self.lamda_vl * variatL_r
+            if self.replay_targets == "hard":
+                loss_replay += self.lamda_pl * predL_r
+            elif self.replay_targets == "soft":
+                loss_replay += self.lamda_pl * distilL_r
 
 
         # Calculate total loss
-        loss_replay = None if (x_ is None) else sum(loss_replay)/n_replays
+        loss_replay = None if (x_ is None) else loss_replay
         loss_total = loss_replay if (x is None) else (loss_cur if x_ is None else rnt*loss_cur+(1-rnt)*loss_replay)
 
 
@@ -739,9 +666,9 @@ class CondVAE(ContinualLearner):
             'recon': reconL.item() if x is not None else 0,
             'variat': variatL.item() if x is not None else 0,
             'pred': predL.item() if x is not None else 0,
-            'recon_r': sum(reconL_r).item()/n_replays if x_ is not None else 0,
-            'variat_r': sum(variatL_r).item()/n_replays if x_ is not None else 0,
-            'pred_r': sum(predL_r).item()/n_replays if (x_ is not None and predL_r[0] is not None) else 0,
-            'distil_r': sum(distilL_r).item()/n_replays if (x_ is not None and distilL_r[0] is not None) else 0,
+            'recon_r': reconL_r.item() if x_ is not None else 0,
+            'variat_r': variatL_r.item() if x_ is not None else 0,
+            'pred_r': predL_r.item() if (x_ is not None and predL_r is not None) else 0,
+            'distil_r': distilL_r.item() if (x_ is not None and distilL_r is not None) else 0,
             'param_reg': weight_penalty_loss.item() if weight_penalty_loss is not None else 0,
         }

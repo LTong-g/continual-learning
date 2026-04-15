@@ -7,13 +7,12 @@ def visdom_name(args):
     '''Get name for graph in visdom from [args].'''
     iCaRL = (checkattr(args, 'prototypes') and checkattr(args, 'add_buffer') and checkattr(args, 'bce')
              and checkattr(args, 'bce_distill'))
-    name = "{fb}{replay}{param_reg}{xdg}{icarl}{fromp}{bud}".format(
+    name = "{fb}{replay}{param_reg}{icarl}{fromp}{bud}".format(
         fb="1M-" if checkattr(args, 'feedback') else "",
         replay="{}{}{}".format(args.replay, "D" if checkattr(args, 'distill') else "",
                                "-aGEM" if hasattr(args, 'use_replay') and args.use_replay=='inequality' else ""),
         param_reg="-par{}-{}".format(args.reg_strength,
                                      args.importance_weighting) if checkattr(args, 'weight_penalty') else '',
-        xdg="" if (not checkattr(args, 'xdg')) or args.gating_prop == 0 else "-XdG{}".format(args.gating_prop),
         icarl="-iCaRL" if iCaRL else "",
         fromp="-FROMP{}".format(args.tau) if checkattr(args, 'fromp') else "",
         bud="-bud{}".format(args.budget) if args.replay=='buffer' or iCaRL else "",
@@ -21,12 +20,12 @@ def visdom_name(args):
     return name
 
 
-def get_param_stamp_from_args(args, no_boundaries=False):
+def get_param_stamp_from_args(args):
     '''To get param-stamp a bit quicker.'''
 
     config = get_context_set(
-        name=args.experiment, scenario=args.scenario, contexts=args.contexts, data_dir=args.d_dir, only_config=True,
-        normalize=checkattr(args, "normalize"), verbose=False, singlehead=checkattr(args, 'singlehead'),
+        name=args.experiment, contexts=args.contexts, data_dir=args.d_dir, only_config=True,
+        normalize=checkattr(args, "normalize"), verbose=False,
     )
 
     # -get feature extractor architecture (if used)
@@ -44,7 +43,7 @@ def get_param_stamp_from_args(args, no_boundaries=False):
         config['channels'] = feature_extractor.conv_out_channels
         depth = 0
     # -get classifier architecture
-    model = define.define_classifier(args=args, config=config, device='cpu', depth=depth, stream=no_boundaries)
+    model = define.define_classifier(args=args, config=config, device='cpu', depth=depth)
     # -get generator architecture (if used)
     train_gen = True if (args.replay=="generative" and not checkattr(args, 'feedback')) else False
     if train_gen:
@@ -53,23 +52,19 @@ def get_param_stamp_from_args(args, no_boundaries=False):
     model_name = model.name
     replay_model_name = generator.name if train_gen else None
     param_stamp = get_param_stamp(args, model_name, verbose=False, replay_model_name=replay_model_name,
-                                  feature_extractor_name=feature_extractor_name, no_boundaries=no_boundaries)
+                                  feature_extractor_name=feature_extractor_name)
     return param_stamp
 
 
-def get_param_stamp(args, model_name, verbose=True, replay_model_name=None, feature_extractor_name=None,
-                    no_boundaries=False):
+def get_param_stamp(args, model_name, verbose=True, replay_model_name=None, feature_extractor_name=None):
     '''Based on the input-arguments, produce a "parameter-stamp".'''
 
     # -for problem specification
-    multi_n_stamp = "{n}{joint}{cum}-{sce}".format(n=args.contexts, joint="-Joint" if checkattr(args, 'joint') else "",
+    multi_n_stamp = "{n}{joint}{cum}".format(n=args.contexts, joint="-Joint" if checkattr(args, 'joint') else "",
                                                    cum="-Cummulative" if checkattr(args, 'cummulative') else "",
-                                                   sce=args.scenario) if hasattr(args, "contexts") else ""
-    stream_stamp = "-{stream}{fuzz}".format(
-        stream=args.stream, fuzz="{}-".format(args.fuzziness) if args.stream=="fuzzy-boundaries" else "-"
-    ) if no_boundaries else ""
-    problem_stamp = "{exp}{stream}{norm}{aug}{multi_n}".format(
-        exp=args.experiment, stream=stream_stamp, norm="-N" if hasattr(args, 'normalize') and args.normalize else "",
+                                                   ) if hasattr(args, "contexts") else ""
+    problem_stamp = "{exp}{norm}{aug}{multi_n}".format(
+        exp=args.experiment, norm="-N" if hasattr(args, 'normalize') and args.normalize else "",
         aug="+" if hasattr(args, "augment") and args.augment else "", multi_n=multi_n_stamp
     )
     if verbose:
@@ -90,13 +85,10 @@ def get_param_stamp(args, model_name, verbose=True, replay_model_name=None, feat
         pre = ""
     freeze_conv = (checkattr(args, "freeze_convE") and hasattr(args, 'depth') and args.depth>0)
     freeze = "-fCvE" if (freeze_conv and (feature_extractor_name is None)) else ""
-    train_stamp = "i{num}-lr{lr}-b{bsz}{pre}{freeze}-{optim}{mom}{neg}{recon}".format(
+    train_stamp = "i{num}-lr{lr}-b{bsz}{pre}{freeze}-{optim}{mom}{recon}".format(
         num=args.iters, lr=args.lr, bsz=args.batch, pre=pre, freeze=freeze, optim=args.optimizer, mom="-m{}".format(
             args.momentum
         ) if args.optimizer=='sgd' and hasattr(args, 'momentum') and args.momentum>0 else "",
-        neg="-{}".format(args.neg_samples) if (
-                args.scenario=="class" and (not checkattr(args, 'gen_classifier')) and (not no_boundaries)
-        ) else "",
         recon="-{}".format(args.recon_loss) if (
                 checkattr(args, 'gen_classifier') or (hasattr(args, 'replay') and args.replay=="generative")
         ) else "",
@@ -133,12 +125,6 @@ def get_param_stamp(args, model_name, verbose=True, replay_model_name=None, feat
         elif args.importance_weighting=='owm':
             param_reg_stamp += "-OWM"
 
-    # -for context-specific components
-    xdg_stamp = ""
-    if checkattr(args, 'xdg') and args.gating_prop>0:
-        xdg_stamp = "--XdG{}".format(args.gating_prop)
-        if verbose:
-            print(" --> XdG:           " + "gating = {}".format(args.gating_prop))
 
     # -for replay / functional regularization (except FROMP)
     replay_stamp = ""
@@ -181,18 +167,12 @@ def get_param_stamp(args, model_name, verbose=True, replay_model_name=None, feat
     # -for binary classification loss (e.g., iCaRL)
     bin_stamp = ""
     if checkattr(args, 'bce'):
-        bin_stamp = '--BCE_dist' if (checkattr(args, 'bce_distill') and args.scenario=="class") else '--BCE'
-
-    # -specific to task-free protocol: how often to update the 'previous_model' relative to which to stay close
-    stream_stamp = ""
-    if no_boundaries and hasattr(args, 'update_every') and not args.update_every==1:
-        if use_memory_buffer or replay_stamp or param_reg_stamp:
-            stream_stamp = '--upEv{}'.format(args.update_every)
+        bin_stamp = '--BCE_dist' if checkattr(args, 'bce_distill') else '--BCE'
 
     # --> combine
-    param_stamp = "{}--{}--{}{}{}{}{}{}{}{}".format(
-        problem_stamp, model_stamp, train_stamp, param_reg_stamp, xdg_stamp, replay_stamp, memory_buffer_stamp,
-        bin_stamp, stream_stamp, "-s{}".format(args.seed) if not args.seed==0 else ""
+    param_stamp = "{}--{}--{}{}{}{}{}{}".format(
+        problem_stamp, model_stamp, train_stamp, param_reg_stamp, replay_stamp, memory_buffer_stamp,
+        bin_stamp, "-s{}".format(args.seed) if not args.seed==0 else ""
     )
 
     ## Print param-stamp on screen and return

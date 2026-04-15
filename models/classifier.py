@@ -103,15 +103,15 @@ class Classifier(ContinualLearner, MemoryBuffer):
     def feature_extractor(self, images):
         return self.fcE(self.flatten(self.convE(images)))
 
-    def classify(self, x, allowed_classes=None, no_prototypes=False):
-        '''For input [x] (image/"intermediate" features), return predicted "scores"/"logits" for [allowed_classes].'''
+    def classify(self, x, no_prototypes=False):
+        '''For input [x] (image/"intermediate" features), return predicted "scores"/"logits".'''
         if self.prototypes and not no_prototypes:
-            return self.classify_with_prototypes(x, allowed_classes=allowed_classes)
+            return self.classify_with_prototypes(x)
         else:
             image_features = self.flatten(self.convE(x))
             hE = self.fcE(image_features)
             scores = self.classifier(hE)
-            return scores if (allowed_classes is None) else scores[:, allowed_classes]
+            return scores
 
 
     def train_a_batch(self, x, y, scores=None, x_=None, y_=None, scores_=None, rnt=0.5, active_classes=None, context=1,
@@ -121,7 +121,7 @@ class Classifier(ContinualLearner, MemoryBuffer):
         [x]               <tensor> batch of inputs (could be None, in which case only 'replayed' data is used)
         [y]               <tensor> batch of corresponding labels
         [scores]          None or <tensor> 2Dtensor:[batch]x[classes] predicted "scores"/"logits" for [x]
-                            NOTE: only to be used for "BCE with distill" (only when scenario=="class")
+                            NOTE: only to be used for "BCE with distill"
         [x_]              None or (<list> of) <tensor> batch of replayed inputs
         [y_]              None or (<list> of) <tensor> batch of corresponding "replayed" labels
         [scores_]         None or (<list> of) <tensor> 2Dtensor:[batch]x[classes] predicted "scores"/"logits" for [x_]
@@ -141,84 +141,52 @@ class Classifier(ContinualLearner, MemoryBuffer):
         # Reset optimizer
         self.optimizer.zero_grad()
 
-        # Should gradient be computed separately for each context? (needed when a context-mask is combined with replay)
-        gradient_per_context = True if ((self.mask_dict is not None) and (x_ is not None)) else False
-
-
         ##--(1)-- REPLAYED DATA --##
+        loss_replay = None
+        predL_r = None
+        distilL_r = None
 
         if x_ is not None:
-            # If there are different predictions per context, [y_] or [scores_] are lists and [x_] must be evaluated
-            # separately on each of them (although [x_] could be a list as well!)
-            PerContext = (type(y_)==list) if (y_ is not None) else (type(scores_)==list)
-            if not PerContext:
-                y_ = [y_]
-                scores_ = [scores_]
-                active_classes = [active_classes] if (active_classes is not None) else None
-            n_replays = len(y_) if (y_ is not None) else len(scores_)
+            # Run model on replayed inputs
+            y_hat = self(x_)
 
-            # Prepare lists to store losses for each replay
-            loss_replay = [None]*n_replays
-            predL_r = [None]*n_replays
-            distilL_r = [None]*n_replays
+            # -if needed, remove predictions for classes not active in the replayed batch
+            if active_classes is not None:
+                y_hat = y_hat[:, active_classes]
 
-            # Run model (if [x_] is not a list with separate replay per context and there is no context-specific mask)
-            if (not type(x_)==list) and (self.mask_dict is None):
-                y_hat_all = self(x_)
+            # Prediction loss on replay
+            if y_ is not None:
+                if self.binaryCE:
+                    binary_targets_ = lf.to_one_hot(y_.cpu(), y_hat.size(1)).to(y_.device)
+                    predL_r = F.binary_cross_entropy_with_logits(
+                        input=y_hat, target=binary_targets_, reduction='none'
+                    ).sum(dim=1).mean()
+                else:
+                    predL_r = F.cross_entropy(y_hat, y_, reduction='mean')
 
-            # Loop to evalute predictions on replay according to each previous context
-            for replay_id in range(n_replays):
+            # Distillation loss on replay
+            if scores_ is not None:
+                n_classes_to_consider = y_hat.size(1)
+                kd_fn = lf.loss_fn_kd_binary if self.binaryCE else lf.loss_fn_kd
+                distilL_r = kd_fn(
+                    scores=y_hat[:, :n_classes_to_consider],
+                    target_scores=scores_,
+                    T=self.KD_temp
+                )
 
-                # -if [x_] is a list with separate replay per context, evaluate model on this context's replay
-                if (type(x_)==list) or (self.mask_dict is not None):
-                    x_temp_ = x_[replay_id] if type(x_)==list else x_
-                    if self.mask_dict is not None:
-                        self.apply_XdGmask(context=replay_id+1)
-                    y_hat_all = self(x_temp_)
-
-                # -if needed, remove predictions for classes not active in the replayed context
-                y_hat = y_hat_all if (active_classes is None) else y_hat_all[:, active_classes[replay_id]]
-
-                # Calculate losses
-                if (y_ is not None) and (y_[replay_id] is not None):
-                    if self.binaryCE:
-                        binary_targets_ = lf.to_one_hot(y_[replay_id].cpu(), y_hat.size(1)).to(y_[replay_id].device)
-                        predL_r[replay_id] = F.binary_cross_entropy_with_logits(
-                            input=y_hat, target=binary_targets_, reduction='none'
-                        ).sum(dim=1).mean()     #--> sum over classes, then average over batch
-                    else:
-                        predL_r[replay_id] = F.cross_entropy(y_hat, y_[replay_id], reduction='mean')
-                if (scores_ is not None) and (scores_[replay_id] is not None):
-                    # n_classes_to_consider = scores.size(1) #--> with this version, no zeroes are added to [scores]!
-                    n_classes_to_consider = y_hat.size(1)    #--> zeros will be added to [scores] to make it this size!
-                    kd_fn = lf.loss_fn_kd_binary if self.binaryCE else lf.loss_fn_kd
-                    distilL_r[replay_id] = kd_fn(scores=y_hat[:, :n_classes_to_consider],
-                                                 target_scores=scores_[replay_id], T=self.KD_temp)
-
-                # Weigh losses
-                if self.replay_targets=="hard":
-                    loss_replay[replay_id] = predL_r[replay_id]
-                elif self.replay_targets=="soft":
-                    loss_replay[replay_id] = distilL_r[replay_id]
-
-                # If needed, perform backward pass before next context-mask (gradients of all contexts will be accumulated)
-                if gradient_per_context:
-                    weight = 1. if self.use_replay=='inequality' else (1.-rnt)
-                    weighted_replay_loss_this_context = weight * loss_replay[replay_id] / n_replays
-                    weighted_replay_loss_this_context.backward()
-
-        # Calculate total replay loss
-        loss_replay = None if (x_ is None) else sum(loss_replay)/n_replays
-        if (x_ is not None) and self.lwf_weighting and (not self.scenario=='class'):
-            loss_replay *= (context-1)
+            # Weigh losses
+            if self.replay_targets == "hard":
+                loss_replay = predL_r
+            elif self.replay_targets == "soft":
+                loss_replay = distilL_r
 
         # If using the replayed loss as an inequality constraint, calculate and store averaged gradient of replayed data
         if self.use_replay in ('inequality', 'both') and x_ is not None:
             # Perform backward pass to calculate gradient of replayed batch (if not yet done)
-            if not gradient_per_context:
-                if self.use_replay == 'both':
-                    loss_replay = (1-rnt) * loss_replay
-                loss_replay.backward()
+            if self.use_replay == 'both':
+                loss_replay = (1-rnt) * loss_replay
+            loss_replay.backward()
+
             # Reorganize the gradient of the replayed batch as a single vector
             grad_rep = []
             for p in self.parameters():
@@ -233,16 +201,12 @@ class Classifier(ContinualLearner, MemoryBuffer):
         ##--(2)-- CURRENT DATA --##
 
         if x is not None:
-            # If requested, apply correct context-specific mask
-            if self.mask_dict is not None:
-                self.apply_XdGmask(context=context)
-
             # Run model
             y_hat = self(x)
             # -if needed, remove predictions for classes not active in the current context
             if active_classes is not None:
-                class_entries = active_classes[-1] if type(active_classes[0])==list else active_classes
-                y_hat = y_hat[:, class_entries]
+                y_hat = y_hat[:, active_classes]
+
 
             # Calculate prediction loss
             if self.binaryCE:
@@ -271,7 +235,7 @@ class Classifier(ContinualLearner, MemoryBuffer):
         # Combine loss from current and replayed batch
         if x_ is None or self.use_replay=='inequality':
             loss_total = loss_cur
-        elif gradient_per_context or self.use_replay=='both':
+        elif self.use_replay=='both':
             # -if backward passes are performed per context (i.e., XdG combined with replay), or when the replayed loss
             #  is both added to the current loss and used as inequality constraint, the gradients of the replayed loss
             #  are already backpropagated and accumulated
@@ -423,8 +387,8 @@ class Classifier(ContinualLearner, MemoryBuffer):
             'loss_current': loss_cur.item() if x is not None else 0,
             'loss_replay': loss_replay.item() if (loss_replay is not None) and (x is not None) else 0,
             'pred': predL.item() if predL is not None else 0,
-            'pred_r': sum(predL_r).item()/n_replays if (x_ is not None and predL_r[0] is not None) else 0,
-            'distil_r': sum(distilL_r).item()/n_replays if (x_ is not None and distilL_r[0] is not None) else 0,
+            'pred_r': predL_r.item() if (x_ is not None and predL_r is not None) else 0,
+            'distil_r': distilL_r.item() if (x_ is not None and distilL_r is not None) else 0,
             'param_reg': weight_penalty_loss.item() if weight_penalty_loss is not None else 0,
             'accuracy': accuracy if accuracy is not None else 0.,
         }

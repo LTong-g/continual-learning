@@ -36,7 +36,7 @@ def handle_inputs():
     # Parse, process and check chosen options
     args = parser.parse_args()
     set_method_options(args)                         # -if a method's "convenience"-option is chosen, select components
-    set_default_values(args, also_hyper_params=True) # -set defaults, some are based on chosen scenario / experiment
+    set_default_values(args, also_hyper_params=True) # -set defaults, some are based on chosen experiment
     check_for_errors(args, **kwargs)                 # -check whether incompatible options are selected
     return args
 
@@ -50,7 +50,7 @@ def run(args, verbose=False):
         os.mkdir(args.p_dir)
 
     # If only want param-stamp, get it printed to screen and exit
-    if checkattr(args, 'get_stamp'):
+    # if checka/ttr(args, 'get_stamp'):
         print(get_param_stamp_from_args(args=args))
         exit()
 
@@ -91,12 +91,12 @@ def run(args, verbose=False):
     if verbose:
         print("\n\n " +' LOAD DATA '.center(70, '*'))
     (train_datasets, test_datasets), config = get_context_set(
-        name=args.experiment, scenario=args.scenario, contexts=args.contexts, data_dir=args.d_dir,
+        name=args.experiment, contexts=args.contexts, data_dir=args.d_dir,
         normalize=checkattr(args, "normalize"), verbose=verbose, exception=(args.seed==0),
-        singlehead=checkattr(args, 'singlehead'), train_set_per_class=checkattr(args, 'gen_classifier')
+        train_set_per_class=checkattr(args, 'gen_classifier')
     )
     # The experiments in this script follow the academic continual learning setting,
-    # the above lines of code therefore load both the 'context set' and the 'data stream'
+    # the above lines of code therefore load the 'context set'
 
     #-------------------------------------------------------------------------------------------------#
 
@@ -154,14 +154,12 @@ def run(args, verbose=False):
     model = define.define_classifier(args=args, config=config, device=device, depth=depth)
 
     # Some type of classifiers consist of multiple networks
-    n_networks = len(train_datasets) if (checkattr(args, 'separate_networks') or
-                                         checkattr(args, 'gen_classifier')) else 1
+    n_networks = len(train_datasets) if checkattr(args, 'gen_classifier') else 1
 
     # Go through all networks to ...
     for network_id in range(n_networks):
-        model_to_set = getattr(model, 'context{}'.format(network_id+1)) if checkattr(args, 'separate_networks') else (
-            getattr(model, 'vae{}'.format(network_id)) if checkattr(args, 'gen_classifier') else model
-        )
+        model_to_set = getattr(model, 'vae{}'.format(network_id)) if checkattr(args, 'gen_classifier') else model
+
         # ... initialize / use pre-trained / freeze model-parameters, and
         define.init_params(model_to_set, args)
         # ... define optimizer (only include parameters that "requires_grad")
@@ -175,38 +173,17 @@ def run(args, verbose=False):
                 model_to_set.optimizer = optim.SGD(model_to_set.optim_list,
                                                    momentum=args.momentum if hasattr(args, 'momentum') else 0.)
 
-    # On what scenario will model be trained? If needed, indicate whether singlehead output / how to set active classes.
-    model.scenario = args.scenario
+    # If needed, indicate whether singlehead output / how to set active classes.
     model.classes_per_context = config['classes_per_context']
-    model.singlehead = checkattr(args, 'singlehead')
-    model.neg_samples = args.neg_samples if hasattr(args, 'neg_samples') else "all"
 
     # Print some model-characteristics on the screen
     if verbose:
-        if checkattr(args, 'gen_classifier') or checkattr(args, 'separate_networks'):
+        if checkattr(args, 'gen_classifier'):
             message = '{} copies of:'.format(len(train_datasets))
             utils.print_model_info(model.vae0 if checkattr(args, 'gen_classifier') else model.context1, message=message)
         else:
             utils.print_model_info(model)
 
-    # -------------------------------------------------------------------------------------------------#
-
-    # ----------------------------------------------------#
-    # ----- CL-STRATEGY: CONTEXT-SPECIFIC COMPONENTS -----#
-    # ----------------------------------------------------#
-
-    # XdG: create for every context a "mask" for each hidden fully connected layer
-    if isinstance(model, ContinualLearner) and checkattr(args, 'xdg') and args.gating_prop > 0.:
-        model.mask_dict = {}
-        for context_id in range(args.contexts):
-            model.mask_dict[context_id + 1] = {}
-            for i in range(model.fcE.layers):
-                layer = getattr(model.fcE, "fcLayer{}".format(i + 1)).linear
-                if context_id == 0:
-                    model.excit_buffer_list.append(layer.excit_buffer)
-                n_units = len(layer.excit_buffer)
-                gated_units = np.random.choice(n_units, size=int(args.gating_prop * n_units), replace=False)
-                model.mask_dict[context_id + 1][i] = gated_units
 
     #-------------------------------------------------------------------------------------------------#
 
@@ -362,7 +339,7 @@ def run(args, verbose=False):
         if verbose:
             print('\n\n'+' VISDOM '.center(70, '*'))
         from visdom import Visdom
-        env_name = "{exp}{con}-{sce}".format(exp=args.experiment, con=args.contexts, sce=args.scenario)
+        env_name = "{exp}{con}".format(exp=args.experiment, con=args.contexts)
         visdom = {'env': Visdom(env=env_name), 'graph': visdom_name(args)}
     else:
         visdom = None
@@ -471,9 +448,7 @@ def run(args, verbose=False):
     accs = []
     for i in range(args.contexts):
         acc = evaluate.test_acc(
-            model, test_datasets[i], verbose=False, test_size=None, context_id=i, allowed_classes=list(
-                range(config['classes_per_context']*i, config['classes_per_context']*(i+1))
-            ) if (args.scenario=="task" and not checkattr(args, 'singlehead')) else None,
+            model, test_datasets[i], verbose=False, test_size=None,
         )
         if verbose:
             print(" - Context {}: {:.4f}".format(i + 1, acc))
@@ -487,7 +462,7 @@ def run(args, verbose=False):
     output_file = open(file_name, 'w')
     output_file.write('{}\n'.format(average_accs))
     output_file.close()
-    # -if requested, also save the results-dict (with accuracy after each task)
+    # -if requested, also save the results-dict (with accuracy after each context)
     if checkattr(args, 'results_dict'):
         file_name = "{}/dict-{}--n{}{}".format(args.r_dir, param_stamp, "All" if args.acc_n is None else args.acc_n,
                                                "--S{}".format(args.eval_s) if checkattr(args, 'gen_classifier') else "")

@@ -23,7 +23,6 @@ def handle_inputs():
     parser = options.add_train_options(parser, **kwargs)
     parser = options.add_cl_options(parser, **kwargs)
     # Should some methods not be included in the comparison?
-    parser.add_argument('--no-context-spec', action='store_true', help="no XdG or Separate Networks")
     parser.add_argument('--no-reg', action='store_true', help="no EWC or SI")
     parser.add_argument('--no-fromp', action='store_true', help="no FROMP")
     parser.add_argument('--no-bir', action='store_true', help="no BI-R")
@@ -31,7 +30,7 @@ def handle_inputs():
     # Parse, process (i.e., set defaults for unselected options) and check chosen options
     args = parser.parse_args()
     args.log_per_context = True
-    set_default_values(args, also_hyper_params=True)  # -set defaults, some are based on chosen scenario / experiment
+    set_default_values(args, also_hyper_params=True)  # -set defaults, some are based on chosen experiment
     check_for_errors(args, **kwargs)                  # -check whether incompatible options are selected
     return args
 
@@ -112,26 +111,6 @@ if __name__ == '__main__':
     JOINT = collect_all(JOINT, seed_list, args, name="Joint")
     args.joint = False
     args.iters = iters_temp
-
-
-    ###----"CONTEXT-SPECIFIC"----####
-
-    if args.scenario=="task" and not checkattr(args, 'no_context_spec'):
-        ## Separate network per context
-        fc_units_temp = args.fc_units
-        args.fc_units = args.fc_units_sep
-        args.separate_networks = True
-        SEP = {}
-        SEP = collect_all(SEP, seed_list, args, name="Separate Networks")
-        args.separate_networks = False
-        args.fc_units = fc_units_temp
-
-        ## XdG
-        always_xdg =  checkattr(args, 'xdg')
-        args.xdg = True
-        XDG = {}
-        XDG = collect_all(XDG, seed_list, args, name="XdG")
-        args.xdg = always_xdg
 
 
     ###----"PARAMETER REGULARIZATION"----####
@@ -229,32 +208,30 @@ if __name__ == '__main__':
 
     ###----"TEMPLATE-BASED CLASSIFICATION"----####
 
-    if args.scenario=="class" and not args.neg_samples=="current":
-        ## iCaRL
-        args.bce = True
-        args.bce_distill = True
-        args.prototypes = True
-        args.add_buffer = True
-        args.sample_selection = "herding"
-        args.neg_samples = "all-so-far"
-        ICARL = {}
-        ICARL = collect_all(ICARL, seed_list, args, name="iCaRL (budget = {})".format(args.budget))
-        args.bce = False
-        args.bce_distill = False
-        args.prototypes = False
-        args.add_buffer = False
+    ## iCaRL
+    args.bce = True
+    args.bce_distill = True
+    args.prototypes = True
+    args.add_buffer = True
+    args.sample_selection = "herding"
+    ICARL = {}
+    ICARL = collect_all(ICARL, seed_list, args, name="iCaRL (budget = {})".format(args.budget))
+    args.bce = False
+    args.bce_distill = False
+    args.prototypes = False
+    args.add_buffer = False
 
-        ## Generative Classifier
-        args.gen_classifier = True
-        classes_per_context = 2 if args.experiment=="splitMNIST" else 10
-        args.iters = int(args.iters / classes_per_context)
-        args.fc_units = args.fc_units_gc
-        args.fc_lay = args.fc_lay_gc
-        args.z_dim = args.z_dim_gc
-        args.hidden = True
-        args.lr = 0.001
-        GENCLASS = {}
-        GENCLASS = collect_all(GENCLASS, seed_list, args, name="Generative Classifier")
+    ## Generative Classifier
+    args.gen_classifier = True
+    classes_per_context = 2 if args.experiment=="splitMNIST" else 10
+    args.iters = int(args.iters / classes_per_context)
+    args.fc_units = args.fc_units_gc
+    args.fc_lay = args.fc_lay_gc
+    args.z_dim = args.z_dim_gc
+    args.hidden = True
+    args.lr = 0.001
+    GENCLASS = {}
+    GENCLASS = collect_all(GENCLASS, seed_list, args, name="Generative Classifier")
 
 
     #-------------------------------------------------------------------------------------------------#
@@ -270,12 +247,8 @@ if __name__ == '__main__':
                          0 if EWC is None else EWC[seed], 0 if SI is None else SI[seed], LWF[seed],
                          0 if FROMP is None else FROMP[seed],
                          DGR[seed], 0 if BIR is None else BIR[seed], ER[seed], 0 if AGEM is None else AGEM[seed]]
-        if args.scenario=="task" and not checkattr(args, 'no_context_spec'):
-            ave_acc[seed].append(XDG[seed])
-            ave_acc[seed].append(SEP[seed])
-        elif args.scenario=="class" and not args.neg_samples=="current":
-            ave_acc[seed].append(ICARL[seed])
-            ave_acc[seed].append(GENCLASS[seed])
+        ave_acc[seed].append(ICARL[seed])
+        ave_acc[seed].append(GENCLASS[seed])
 
 
     #-------------------------------------------------------------------------------------------------#
@@ -285,18 +258,14 @@ if __name__ == '__main__':
     #--------------------------------------------------#
 
     # name for plot
-    plot_name = "summary-{}{}-{}".format(args.experiment, args.contexts, args.scenario)
-    scheme = "{}-incremental learning".format(args.scenario)
+    plot_name = "summary-{}{}".format(args.experiment, args.contexts)
+    scheme = "class incremental learning"
     title = "{}  -  {}".format(args.experiment, scheme)
 
     # select names / colors / ids
     names = ["None", "Joint"]
     colors = ["grey", "black"]
     ids = [0, 1]
-    if args.scenario=="task" and not checkattr(args, 'no_context_spec'):
-        names += ['Separate Networks', 'XdG']
-        colors += ['dodgerblue', 'deepskyblue']
-        ids += [11, 10]
     if not checkattr(args, 'no_reg'):
         names += ['EWC', 'SI']
         colors += ['darkgreen', 'yellowgreen']
@@ -322,10 +291,9 @@ if __name__ == '__main__':
         names.append("A-GEM (b={})".format(args.budget))
         colors.append('orangered')
         ids.append(9)
-    if args.scenario=="class" and not args.neg_samples=="current":
-        names += ['Generative Classifier', "iCaRL (b={})".format(args.budget)]
-        colors += ['indigo', 'purple']
-        ids += [11, 10]
+    names += ['Generative Classifier', "iCaRL (b={})".format(args.budget)]
+    colors += ['indigo', 'purple']
+    ids += [11, 10]
 
     # open pdf
     pp = visual_plt.open_pdf("{}/{}.pdf".format(args.p_dir, plot_name))

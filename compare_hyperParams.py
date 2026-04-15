@@ -14,11 +14,7 @@ from visual import visual_plt as my_plt
 ## Parameter-values to compare
 lamda_list = [1., 10., 100., 1000., 10000., 100000., 1000000., 10000000., 100000000., 1000000000., 10000000000.,
               100000000000., 1000000000000., 10000000000000.]
-lamda_list_permMNIST = [1., 10., 100., 1000., 10000., 100000., 1000000., 10000000.]
 c_list = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1., 5., 10., 50., 100., 500., 1000., 5000., 10000., 50000., 100000.]
-c_list_permMNIST = [0.01, 0.1, 1., 10., 100., 1000., 10000., 100000.]
-xdg_list = [0., 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
-xdg_list_permMNIST = [0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 dg_prop_list = [0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 tau_list = [0.001, 0.01, 0.1, 1., 10., 100., 1000., 10000., 100000.]
 budget_list_splitMNIST = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
@@ -38,14 +34,13 @@ def handle_inputs():
     parser = options.add_train_options(parser, **kwargs)
     parser = options.add_cl_options(parser, **kwargs)
     # Should the gridsearch not be run for some methods?
-    parser.add_argument('--no-xdg', action='store_true', help="no XdG")
     parser.add_argument('--no-reg', action='store_true', help="no EWC or SI")
     parser.add_argument('--no-fromp', action='store_true', help="no FROMP")
     parser.add_argument('--no-bir', action='store_true', help="no BI-R")
     # Parse, process (i.e., set defaults for unselected options) and check chosen options
     args = parser.parse_args()
     args.log_per_context = True
-    set_default_values(args, also_hyper_params=False)  # -set defaults, some are based on chosen scenario / experiment
+    set_default_values(args, also_hyper_params=False)  # -set defaults, some are based on chosen experiment
     check_for_errors(args, **kwargs)                   # -check whether incompatible options are selected
     return args
 
@@ -82,9 +77,6 @@ if __name__ == '__main__':
         os.mkdir(args.p_dir)
 
     ## Select parameter-lists based on chosen experiment
-    xdg_list = xdg_list_permMNIST if args.experiment=="permMNIST" else xdg_list
-    lamda_list = lamda_list_permMNIST if args.experiment=="permMNIST" else lamda_list
-    c_list = c_list_permMNIST if args.experiment=="permMNIST" else c_list
     budget_list = budget_list_splitMNIST if args.experiment=="splitMNIST" else budget_list_splitCIFAR100
 
     #-------------------------------------------------------------------------------------------------#
@@ -96,20 +88,6 @@ if __name__ == '__main__':
     ## Baselline
     args.replay = "none"
     BASE = get_result(args)
-
-    ## XdG
-    if args.scenario=="task" and not utils.checkattr(args, 'no_xdg'):
-        XDG = {}
-        always_xdg = utils.checkattr(args, 'xdg')
-        if always_xdg:
-            gating_prop_selected = args.gating_prop
-        args.xdg = True
-        for xdg in xdg_list:
-            args.gating_prop = xdg
-            XDG[xdg] = get_result(args)
-        args.xdg = always_xdg
-        if always_xdg:
-            args.gating_prop = gating_prop_selected
 
     ## EWC
     if not utils.checkattr(args, 'no_reg'):
@@ -171,18 +149,6 @@ if __name__ == '__main__':
     ext_lambda_list = [0] + lamda_list
     ext_tau_list = [0] + tau_list
     print("\n")
-
-
-    ###---XdG---###
-
-    if args.scenario == "task" and not utils.checkattr(args, 'no_xdg'):
-        # -collect data
-        ave_acc_xdg = [XDG[c] for c in xdg_list]
-        # -print on screen
-        print("\n\nCONTEXT-DEPENDENT GATING (XDG))")
-        print(" param list (gating_prop): {}".format(xdg_list))
-        print("  {}".format(ave_acc_xdg))
-        print("---> gating_prop = {}     --    {}".format(xdg_list[np.argmax(ave_acc_xdg)], np.max(ave_acc_xdg)))
 
 
     ###---EWC---###
@@ -247,8 +213,8 @@ if __name__ == '__main__':
     #--------------------#
 
     # name for plot
-    plot_name = "hyperParams-{}{}-{}".format(args.experiment, args.contexts, args.scenario)
-    scheme = "incremental {} learning".format(args.scenario)
+    plot_name = "hyperParams-{}{}".format(args.experiment, args.contexts)
+    scheme = "class incremental learning"
     title = "{}  -  {}".format(args.experiment, scheme)
     ylabel = "Test accuracy (after all contexts)"
 
@@ -261,26 +227,14 @@ if __name__ == '__main__':
             full_list += item
     if not utils.checkattr(args, 'no_bir'):
         full_list += ave_acc_bir
-    if args.scenario=="task" and not utils.checkattr(args, 'no_xdg'):
-        full_list += ave_acc_xdg
     miny = np.min(full_list)
     maxy = np.max(full_list)
     marginy = 0.1*(maxy-miny)
-    ylim = (np.max([miny-2*marginy, 0]),
-            np.min([maxy+marginy,1])) if not args.scenario=="class" else (0, np.min([maxy+marginy,1]))
+    ylim = (0, np.min([maxy+marginy,1]))
 
     # open pdf
     pp = my_plt.open_pdf("{}/{}.pdf".format(args.p_dir, plot_name))
     figure_list = []
-
-
-    ###---XdG---###
-    if args.scenario=="task" and not utils.checkattr(args, 'no_xdg'):
-        figure = my_plt.plot_lines([ave_acc_xdg], x_axes=xdg_list, ylabel=ylabel,
-                                line_names=["XdG"], colors=["deepskyblue"], ylim=ylim,
-                                title=title, x_log=False, xlabel="XdG: % of nodes gated",
-                                with_dots=True, h_line=BASE, h_label="None")
-        figure_list.append(figure)
 
 
     ###---EWC---###

@@ -32,7 +32,7 @@ def handle_inputs():
     parser.add_argument('--no-fromp', action='store_true', help="no FROMP")
     # Parse, process (i.e., set defaults for unselected options) and check chosen options
     args = parser.parse_args()
-    set_default_values(args, also_hyper_params=False) # -set defaults, some are based on chosen scenario / experiment
+    set_default_values(args, also_hyper_params=False) # -set defaults, some are based on chosen experiment
     check_for_errors(args, **kwargs)                  # -check whether incompatible options are selected
     return args
 
@@ -95,15 +95,8 @@ if __name__ == '__main__':
 
     budget_limit_FROMP = 1000
     if checkattr(args, 'tau_per_budget'):
-        if args.scenario=="task":
-            tau_dict = {'1': 100000., '2': 1000., '5': 100000., '10': 0.001, '20': 10000., '50': 1000.,
-                        '100': 0.01, '200': 0.01, '500': 0.1, '1000': 10.}
-        elif args.scenario=="domain":
-            tau_dict = {'1': 0.001, '2': 100000., '5': 100000., '10': 100000., '20': 100000., '50': 10000.,
-                        '100': 10., '200': 1., '500': 10., '1000': 0.1}
-        elif args.scenario=="class":
-            tau_dict = {'1': 100000., '2': 0.01, '5': 10000., '10': 100000., '20': 10000., '50': 1000.,
-                        '100': 1000., '200': 10., '500': 0.001, '1000': 1.}
+        tau_dict = {'1': 100000., '2': 0.01, '5': 10000., '10': 100000., '20': 10000., '50': 1000.,
+                    '100': 1000., '200': 10., '500': 0.001, '1000': 1.}
 
 
     ###### BASELINES #########
@@ -161,19 +154,17 @@ if __name__ == '__main__':
         args.fromp = False
 
     ## iCaRL
-    if args.scenario=="class":
-        args.replay = "none"
-        args.prototypes = True
-        args.bce = True
-        args.bce_distill = True
-        args.add_buffer = True
-        args.sample_selection = 'herding'
-        args.neg_samples = "all-so-far"
-        ICARL = {}
-        for budget in budget_list:
-            args.budget = budget
-            ICARL[budget] = {}
-            ICARL[budget] = collect_all(ICARL[budget], seed_list, args, name="iCaRL - budget = {}".format(budget))
+    args.replay = "none"
+    args.prototypes = True
+    args.bce = True
+    args.bce_distill = True
+    args.add_buffer = True
+    args.sample_selection = 'herding'
+    ICARL = {}
+    for budget in budget_list:
+        args.budget = budget
+        ICARL[budget] = {}
+        ICARL[budget] = collect_all(ICARL[budget], seed_list, args, name="iCaRL - budget = {}".format(budget))
 
 
     #-------------------------------------------------------------------------------------------------#
@@ -183,8 +174,8 @@ if __name__ == '__main__':
     #--------------------#
 
     # name for plot
-    plot_name = "summaryExactRep-{}{}-{}".format(args.experiment,args.contexts,args.scenario)
-    scheme = "incremental {} learning".format(args.scenario)
+    plot_name = "summaryExactRep-{}{}".format(args.experiment,args.contexts)
+    scheme = "class incremental learning"
     title = "{}  -  {}".format(args.experiment, scheme)
 
     # open pdf
@@ -192,7 +183,7 @@ if __name__ == '__main__':
     figure_list = []
 
     # set scale of y-axis
-    y_lim = [0,1] if args.scenario=="class" else None
+    y_lim = [0,1]
     y_lim = None
 
     # Methods for comparison
@@ -212,9 +203,8 @@ if __name__ == '__main__':
     if not checkattr(args, 'no_fromp'):
         ave_FROMP = []
         sem_FROMP = []
-    if args.scenario=="class":
-        ave_ICARL = []
-        sem_ICARL = []
+    ave_ICARL = []
+    sem_ICARL = []
 
     for budget in budget_list:
         all_entries = [ER[budget][seed] for seed in seed_list]
@@ -238,11 +228,10 @@ if __name__ == '__main__':
                 if args.n_seeds>1:
                     sem_FROMP.append(np.nan)
 
-        if args.scenario=="class":
-            all_entries = [ICARL[budget][seed] for seed in seed_list]
-            ave_ICARL.append(np.mean(all_entries))
-            if args.n_seeds > 1:
-                sem_ICARL.append(np.sqrt(np.var(all_entries) / (len(all_entries) - 1)))
+        all_entries = [ICARL[budget][seed] for seed in seed_list]
+        ave_ICARL.append(np.mean(all_entries))
+        if args.n_seeds > 1:
+            sem_ICARL.append(np.sqrt(np.var(all_entries) / (len(all_entries) - 1)))
 
     # -collect
     lines = [ave_ER, ave_AGEM]
@@ -255,12 +244,11 @@ if __name__ == '__main__':
         colors.append("goldenrod")
         if args.n_seeds>1:
             errors.append(sem_FROMP)
-    if args.scenario=="class":
-        lines.append(ave_ICARL)
-        line_names.append("iCaRL")
-        colors.append("purple")
-        if args.n_seeds>1:
-            errors.append(sem_ICARL)
+    lines.append(ave_ICARL)
+    line_names.append("iCaRL")
+    colors.append("purple")
+    if args.n_seeds>1:
+        errors.append(sem_ICARL)
 
     # -plot
     figure = visual_plt.plot_lines(

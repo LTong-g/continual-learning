@@ -11,12 +11,8 @@ from utils import get_data_loader,checkattr
 ####----CLASSIFIER EVALUATION----####
 ####-----------------------------####
 
-def test_acc(model, dataset, batch_size=128, test_size=1024, verbose=True, context_id=None, allowed_classes=None,
-             no_context_mask=False, **kwargs):
-    '''Evaluate accuracy (= proportion of samples classified correctly) of a classifier ([model]) on [dataset].
-
-    [allowed_classes]   None or <list> containing all "active classes" between which should be chosen
-                            (these "active classes" are assumed to be contiguous)'''
+def test_acc(model, dataset, batch_size=128, test_size=1024, verbose=True, **kwargs):
+    '''Evaluate accuracy (= proportion of samples classified correctly) of a classifier ([model]) on [dataset].'''
 
     # Get device-type / using cuda?
     device = model.device if hasattr(model, 'device') else model._device()
@@ -26,20 +22,6 @@ def test_acc(model, dataset, batch_size=128, test_size=1024, verbose=True, conte
     mode = model.training
     model.eval()
 
-    # Apply context-specifc "gating-mask" for each hidden fully connected layer (or remove it!)
-    if hasattr(model, "mask_dict") and model.mask_dict is not None:
-        if no_context_mask:
-            model.reset_XdGmask()
-        else:
-            model.apply_XdGmask(context=context_id+1)
-
-    # Should output-labels be adjusted for allowed classes? (ASSUMPTION: [allowed_classes] has consecutive numbers)
-    label_correction = 0 if checkattr(model, 'stream_classifier') or (allowed_classes is None) else allowed_classes[0]
-
-    # If there is a separate network per context, select the correct subnetwork
-    if model.label=="SeparateClassifiers":
-        model = getattr(model, 'context{}'.format(context_id+1))
-        allowed_classes = None
 
     # Loop over batches in [dataset]
     data_loader = get_data_loader(dataset, batch_size, cuda=cuda)
@@ -49,21 +31,11 @@ def test_acc(model, dataset, batch_size=128, test_size=1024, verbose=True, conte
         if test_size:
             if total_tested >= test_size:
                 break
-        # -if the model is a "stream-classifier", add context
-        if checkattr(model, 'stream_classifier'):
-            context_tensor = torch.tensor([context_id]*x.shape[0]).to(device)
-        # -evaluate model (if requested, only on [allowed_classes])
+        # -evaluate model
         with torch.no_grad():
-            if checkattr(model, 'stream_classifier'):
-                scores = model.classify(x.to(device), context=context_tensor)
-            else:
-                scores = model.classify(x.to(device), allowed_classes=allowed_classes)
+            scores = model.classify(x.to(device))
         _, predicted = torch.max(scores.cpu(), 1)
-        if model.prototypes and max(predicted).item() >= model.classes:
-            # -in case of Domain-IL (or Task-IL + singlehead), collapse all corresponding domains to same class
-            predicted = predicted % model.classes
         # -update statistics
-        y = y-label_correction
         total_correct += (predicted == y).sum().item()
         total_tested += len(x)
     accuracy = total_correct / total_tested
@@ -75,7 +47,7 @@ def test_acc(model, dataset, batch_size=128, test_size=1024, verbose=True, conte
     return accuracy
 
 
-def test_all_so_far(model, datasets, current_context, iteration, test_size=None, no_context_mask=False,
+def test_all_so_far(model, datasets, current_context, iteration, test_size=None,
                     visdom=None, summary_graph=True, plotting_dict=None, verbose=False):
     '''Evaluate accuracy of a classifier (=[model]) on all contexts so far (= up to [current_context]) using [datasets].
 
@@ -85,19 +57,12 @@ def test_all_so_far(model, datasets, current_context, iteration, test_size=None,
 
     # Evaluate accuracy of model predictions
     # - in the academic CL setting:  for all contexts so far, reporting "0" for future contexts
-    # - in task-free stream setting (current_context==None): always for all contexts
     precs = []
     for i in range(n_contexts):
-        if (current_context is None) or (i+1 <= current_context):
-            allowed_classes = None
-            if model.scenario=='task' and not checkattr(model, 'singlehead'):
-                allowed_classes = list(range(model.classes_per_context * i, model.classes_per_context * (i + 1)))
-            precs.append(test_acc(model, datasets[i], test_size=test_size, verbose=verbose,
-                                  allowed_classes=allowed_classes, no_context_mask=no_context_mask, context_id=i))
+        if i+1 <= current_context:
+            precs.append(test_acc(model, datasets[i], test_size=test_size, verbose=verbose))
         else:
             precs.append(0)
-    if current_context is None:
-        current_context = i+1
     average_precs = sum([precs[context_id] for context_id in range(current_context)]) / current_context
 
     # Print results on screen
@@ -132,8 +97,7 @@ def initiate_plotting_dict(n_contexts):
     plotting_dict["acc per context"] = {}
     for i in range(n_contexts):
         plotting_dict["acc per context"]["context {}".format(i+1)] = []
-    plotting_dict["average"] = []      # average accuracy over all contexts so far: Task-IL  -> only classes in context
-                                       #                                            Class-IL -> all classes so far
+    plotting_dict["average"] = []      # average accuracy over all contexts so far: Class-IL -> all classes so far
     plotting_dict["x_iteration"] = []  # total number of iterations so far
     plotting_dict["x_context"] = []    # number of contexts so far (i.e., context on which training just finished)
     return plotting_dict

@@ -16,7 +16,7 @@ def set_method_options(args, **kwargs):
         args.importance_weighting = 'fisher'
         args.fisher_kfac = True
         args.fisher_init = True
-    if checkattr(args, 'kfac_ewc'):
+    if checkattr(args, 'ewc-kfac'):
         args.weight_penalty = True
         args.importance_weighting = 'fisher'
         args.fisher_kfac = True
@@ -34,7 +34,7 @@ def set_method_options(args, **kwargs):
         args.feedback = True  # --> replay-through-feedback
         args.prior = 'GMM'  # --> conditional replay
         args.per_class = True  # --> conditional replay
-        args.dg_gates = True  # --> gating based on internal context (has hyper-param 'dg_prop')
+        args.dg_gates = True  # --> class-specific gates in decoder (has hyper-param 'dg_prop')
         args.hidden = True  # --> internal replay
         args.pre_convE = True  # --> internal replay
         args.distill = True  # --> distillation
@@ -46,7 +46,7 @@ def set_method_options(args, **kwargs):
         args.sample_selection = 'herding'
 
 
-def set_default_values(args, also_hyper_params=True, single_context=False, no_boundaries=False):
+def set_default_values(args, also_hyper_params=True, single_context=False):
     # -set default-values for certain arguments based on chosen experiment
     args.normalize = args.normalize if args.experiment in ('CIFAR10', 'CIFAR100') else False
     args.depth = (
@@ -63,17 +63,8 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
         ) if args.contexts is None else args.contexts
         args.iters = (2000 if args.experiment == 'splitMNIST' else 5000) if args.iters is None else args.iters
     args.lr = (0.001 if args.experiment == 'splitMNIST' else 0.0001) if args.lr is None else args.lr
-    args.batch = (128 if args.experiment in ('splitMNIST', 'permMNIST') else 256) if args.batch is None else args.batch
-    if checkattr(args, 'separate_networks'):
-        args.fc_units = (100 if args.experiment == 'splitMNIST' else 400) if args.fc_units is None else args.fc_units
-    else:
-        args.fc_units = (400 if args.experiment == 'splitMNIST' else (
-            1000 if args.experiment == 'permMNIST' else 2000
-        )) if args.fc_units is None else args.fc_units
-    if hasattr(args, 'fc_units_sep'):
-        args.fc_units_sep = (
-            100 if args.experiment == 'splitMNIST' else 400
-        ) if args.fc_units_sep is None else args.fc_units_sep
+    args.batch = (128 if args.experiment == 'splitMNIST' else 256) if args.batch is None else args.batch
+    args.fc_units = (400 if args.experiment == 'splitMNIST' else 2000) if args.fc_units is None else args.fc_units
     if hasattr(args, 'fc_units_gc'):
         args.fc_units_gc = 85 if args.fc_units_gc is None else args.fc_units_gc
         args.fc_lay_gc = (3 if args.experiment == 'splitMNIST' else 2) if args.fc_lay_gc is None else args.fc_lay_gc
@@ -82,10 +73,8 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
         args.recon_loss = (
             "MSE" if args.experiment in ('CIFAR10', 'CIFAR100') else "BCE"
         ) if args.recon_loss is None else args.recon_loss
-    if hasattr(args, "dg_type"):
-        args.dg_type = ("context" if args.scenario == 'domain' else "class") if args.dg_type is None else args.dg_type
     if hasattr(args, 'budget'):
-        args.budget = (10 if args.experiment == 'permMNIST' else 100) if args.budget is None else args.budget
+        args.budget = 100 if args.budget is None else args.budget
         if hasattr(args, 'sample_selection'):
             args.sample_selection = ('fromp' if checkattr(args, 'fromp') else (
                 'herding' if checkattr(args, 'icarl') else 'random'
@@ -103,39 +92,17 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
         args.loss_log = args.iters if (not hasattr(args, 'loss_log')) or args.loss_log is None else args.loss_log
         args.sample_log = args.iters if (not hasattr(args,'sample_log')) or args.sample_log is None else args.sample_log
 
-    # -set default-values for certain arguments based on chosen scenario & experiment
-    if hasattr(args, 'scenario') and args.scenario == 'task' and hasattr(args, 'gating_prop'):
-        # -context-specific gating
-        args.gating_prop = (
-            0.85 if args.experiment == 'CIFAR100' else (0.9 if args.experiment == 'splitMNIST' else 0.6)
-        ) if args.gating_prop is None else args.gating_prop
+    # -set default-values for certain arguments based on chosen experiment
     if also_hyper_params:
         # -regularization strength
         if not hasattr(args, 'si_c'):
             args.si_c = None
         if not hasattr(args, 'ewc_lambda'):
             args.ewc_lambda = None
-        if no_boundaries:
-            args.si_c = 10. if args.si_c is None else args.si_c
-        elif args.scenario == 'task':
-            args.si_c = (
-                10. if args.experiment == 'splitMNIST' else (100. if args.experiment == 'CIFAR100' else 10.)
-            ) if args.si_c is None else args.si_c
-            args.ewc_lambda = (
-                100000. if args.experiment == 'splitMNIST' else (1000. if args.experiment == 'CIFAR100' else 100.)
-            ) if args.ewc_lambda is None else args.ewc_lambda
-        elif args.scenario == 'domain':
-            args.si_c = (
-                50000. if args.experiment == 'splitMNIST' else (500. if args.experiment == 'CIFAR100' else 10.)
-            ) if args.si_c is None else args.si_c
-            args.ewc_lambda = (
-                10000000000. if args.experiment == 'splitMNIST' else (1000. if args.experiment == 'CIFAR100' else 100.)
-            ) if args.ewc_lambda is None else args.ewc_lambda
-        elif args.scenario == 'class':
-            args.si_c = (5000. if args.experiment == 'splitMNIST' else 5.) if args.si_c is None else args.si_c
-            args.ewc_lambda = (
-                1000000000. if args.experiment == 'splitMNIST' else 100.
-            ) if args.ewc_lambda is None else args.ewc_lambda
+        args.si_c = (5000. if args.experiment == 'splitMNIST' else 5.) if args.si_c is None else args.si_c
+        args.ewc_lambda = (
+            1000000000. if args.experiment == 'splitMNIST' else 100.
+        ) if args.ewc_lambda is None else args.ewc_lambda
         if hasattr(args, 'reg_strength'):
             args.reg_strength = (
                 args.si_c if checkattr(args, 'si') else (args.ewc_lambda if checkattr(args, 'ewc') else 1.)
@@ -143,20 +110,14 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
         # -use a prior for the Fisher (as in NCL)
         if hasattr(args, 'data_size'):
             args.data_size = (12000 if args.experiment == 'splitMNIST' else (
-                60000 if args.experiment == 'permMNIST' else (5000 if args.experiment == 'CIFAR100' else 10000)
+                5000 if args.experiment == 'CIFAR100' else 10000
             )) if args.data_size is None else args.data_size
-        # -gating based on internal context (brain-inspired replay)
-        if args.scenario == 'task' and hasattr(args, 'dg_prop'):
-            args.dg_prop = (0. if args.experiment == 'splitMNIST' else 0.) if args.dg_prop is None else args.dg_prop
-        elif args.scenario == 'domain' and hasattr(args, 'dg_prop'):
-            args.dg_prop = (0.1 if args.experiment == 'splitMNIST' else 0.5) if args.dg_prop is None else args.dg_prop
-        elif args.scenario == 'class' and hasattr(args, 'dg_prop'):
+        # -class-specific gating (brain-inspired replay)
+        if hasattr(args, 'dg_prop'):
             args.dg_prop = (0.1 if args.experiment == 'splitMNIST' else 0.7) if args.dg_prop is None else args.dg_prop
     if hasattr(args, 'tau'):
         # -fromp
-        args.tau = ((0.01 if args.scenario == 'task' else (
-            10. if args.scenario == 'domain' else 1000.
-        )) if args.experiment == 'splitMNIST' else 1.) if args.tau is None else args.tau
+        args.tau = (1000. if args.experiment == 'splitMNIST' else 1.) if args.tau is None else args.tau
 
 
 def check_for_errors(args, pretrain=False, **kwargs):
@@ -164,22 +125,15 @@ def check_for_errors(args, pretrain=False, **kwargs):
         if checkattr(args, 'augment') and not args.experiment in ('CIFAR10', 'CIFAR100'):
             raise ValueError("Augmentation is only supported for 'CIFAR10' or 'CIFAR-100'.")
     if not pretrain:
-        if (checkattr(args, 'separate_networks') or checkattr(args, 'xdg')) and (not args.scenario == "task"):
-            raise ValueError("'XdG' or 'SeparateNetworks' can only be used with --scenario='task'.")
         # -Replay-through-Feedback model is not (yet) implemented with all possible options
         if checkattr(args, 'feedback') and (checkattr(args, 'precondition') or (
                 hasattr(args, 'use_replay') and args.use_replay in ('inequality', 'both')
         )):
             raise NotImplementedError('Replay-through-Feedback currently does not support gradient projection.')
-        if checkattr(args, 'feedback') and checkattr(args, 'xdg'):
-            raise NotImplementedError('Replay-through-Feedback currently does not support XdG (in the encoder).')
         if checkattr(args, 'feedback') and args.importance_weighting=='fisher' and checkattr(args, 'fisher_kfac'):
             raise NotImplementedError('Replay-through-Feedback currently does not support using KFAC Fisher.')
         if checkattr(args, 'feedback') and checkattr(args, 'bce'):
             raise NotImplementedError('Replay-through-Feedback currently does not support binary classification loss.')
-        # -if 'BCEdistill' is selected for other than scenario=="class", give error
-        if checkattr(args, 'bce_distill') and not args.scenario=="class":
-            raise ValueError("BCE-distill can only be used for class-incremental learning.")
         # -with parameter regularization, not (yet) all combinations are implemented
         if hasattr(args, 'importance_weighting') and args.importance_weighting=='owm' and \
                 checkattr(args, 'weight_penalty'):
@@ -203,13 +157,11 @@ def check_for_errors(args, pretrain=False, **kwargs):
             raise NotImplementedError('The Generative Classifier is not supported with FROMP.')
         # -a conditional generative model for GR is only supported in combination with Replay-through-Feedback
         if (checkattr(args, 'per_class') or checkattr(args, 'dg_gates')) and not checkattr(args, 'feedback'):
-            raise NotImplementedError('A VAE with separate mode per class or context-specific gates in the decoder is '
+            raise NotImplementedError('A VAE with separate mode per class or class-specific gates in the decoder is '
                                       'only supported in combination with the replay-through-feedback model.')
         # -warning about that XdG and FROMP and KFAC are only applied to fully connected layers?
         trainable_conv = hasattr(args, 'depth') and args.depth>0 and ((not checkattr(args, 'freeze_convE')) or
                                                                       checkattr(args, 'hidden'))
-        if checkattr(args, 'xdg') and trainable_conv:
-            print('Note that XdG is only applied to the fully connected layers of the network.')
         if checkattr(args, 'fromp') and trainable_conv:
             print('Note that FROMP is only applied to the fully connected layers of the network.')
         if checkattr(args, 'fisher_kfac') and trainable_conv:

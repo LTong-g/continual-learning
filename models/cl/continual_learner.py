@@ -27,25 +27,18 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
         self.optim_list = []
         #--> self.[optim_list]   <list>, if optimizer should be reset after each context, provide list of required <dicts>
 
-        # Scenario, singlehead & negative samples
-        self.scenario = 'task'       # which scenario will the model be trained on
-        self.classes_per_context = 2 # number of classes per context
-        self.singlehead = False      # if Task-IL, does the model have a single-headed output layer?
-        self.neg_samples = 'all'     # if Class-IL, which output units should be set to 'active'?
+        # Singlehead & negative samples
+        self.classes_per_context = 2  # number of classes per context
 
         # LwF / Replay
-        self.replay_mode = "none"    # should replay be used, and if so what kind? (none|current|buffer|all|generative)
-        self.replay_targets = "hard" # should distillation loss be used? (hard|soft)
-        self.KD_temp = 2.            # temperature for distillation loss
-        self.use_replay = "normal"   # how to use the replayed data? (normal|inequality|both)
-                                     # -inequality = use gradient of replayed data as inequality constraint for gradient
-                                     #               of the current data (as in A-GEM; Chaudry et al., 2019; ICLR)
-        self.eps_agem = 0.           # parameter that improves numerical stability of AGEM (if set slighly above 0)
-        self.lwf_weighting = False   # LwF has different weighting of the 'stability' and 'plasticity' terms than replay
-
-        # XdG:
-        self.mask_dict = None        # -> <dict> with context-specific masks for each hidden fully-connected layer
-        self.excit_buffer_list = []  # -> <list> with excit-buffers for all hidden fully-connected layers
+        self.replay_mode = "none"     # should replay be used, and if so what kind? (none|current|buffer|all|generative)
+        self.replay_targets = "hard"  # should distillation loss be used? (hard|soft)
+        self.KD_temp = 2.             # temperature for distillation loss
+        self.use_replay = "normal"    # how to use the replayed data? (normal|inequality|both)
+                                      # -inequality = use gradient of replayed data as inequality constraint for gradient
+                                      #               of the current data (as in A-GEM; Chaudry et al., 2019; ICLR)
+        self.eps_agem = 0.            # parameter that improves numerical stability of AGEM (if set slighly above 0)
+        self.lwf_weighting = False    # LwF has different weighting of the 'stability' and 'plasticity' terms than replay
 
         # Parameter-regularization
         self.weight_penalty = False
@@ -79,30 +72,6 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
 
     def _is_on_cuda(self):
         return next(self.parameters()).is_cuda
-
-
-    #----------------- XdG-specifc functions -----------------#
-
-    def apply_XdGmask(self, context):
-        '''Apply context-specific mask, by setting activity of pre-selected subset of nodes to zero.
-
-        [context]   <int>, starting from 1'''
-
-        assert self.mask_dict is not None
-        torchType = next(self.parameters()).detach()
-
-        # Loop over all buffers for which a context-specific mask has been specified
-        for i,excit_buffer in enumerate(self.excit_buffer_list):
-            gating_mask = np.repeat(1., len(excit_buffer))
-            gating_mask[self.mask_dict[context][i]] = 0.    # -> find context-specific mask
-            excit_buffer.set_(torchType.new(gating_mask))   # -> apply this mask
-
-    def reset_XdGmask(self):
-        '''Remove context-specific mask, by setting all "excit-buffers" to 1.'''
-        torchType = next(self.parameters()).detach()
-        for excit_buffer in self.excit_buffer_list:
-            gating_mask = np.repeat(1., len(excit_buffer))  # -> define "unit mask" (i.e., no masking at all)
-            excit_buffer.set_(torchType.new(gating_mask))   # -> apply this unit mask
 
 
     #------------- "Synaptic Intelligence"-specifc functions -------------#

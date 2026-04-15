@@ -148,7 +148,6 @@ class MemoryBuffer(nn.Module, metaclass=abc.ABCMeta):
         """Classify images by nearest-prototype / nearest-mean-of-exemplars rule (after transform to feature space)
 
         INPUT:      x = <tensor> of size (bsz,ich,isz,isz) with input image batch
-                    allowed_classes = None or <list> containing all "active classes" between which should be chosen
 
         OUTPUT:     scores = <tensor> of size (bsz,n_classes)
         """
@@ -182,9 +181,7 @@ class MemoryBuffer(nn.Module, metaclass=abc.ABCMeta):
             self.compute_means = False
 
         # Reorganize the [memory_set_means]-<tensor>
-        memory_set_means = self.memory_set_means if allowed_classes is None else [
-            self.memory_set_means[i] for i in allowed_classes
-        ]
+        memory_set_means = self.memory_set_means
         means = torch.stack(memory_set_means)      # (n_classes, feature_size)
         means = torch.stack([means] * batch_size)  # (batch_size, n_classes, feature_size)
         means = means.transpose(1, 2)              # (batch_size, feature_size, n_classes)

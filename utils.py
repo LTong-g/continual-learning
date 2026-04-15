@@ -79,8 +79,6 @@ def save_checkpoint(model, model_dir, verbose=True, name=None):
         os.makedirs(model_dir)
     # -create the dictionary containing the checkpoint
     checkpoint = {'state': model.state_dict()}
-    if hasattr(model, 'mask_dict') and model.mask_dict is not None:
-        checkpoint['mask_dict'] = model.mask_dict
     # -(try to) save the checkpoint
     try:
         torch.save(checkpoint, path)
@@ -97,8 +95,6 @@ def load_checkpoint(model, model_dir, verbose=True, name=None, strict=True):
     # load parameters (i.e., [model] will now have the state of the loaded model)
     checkpoint = torch.load(path)
     model.load_state_dict(checkpoint['state'], strict=strict)
-    if 'mask_dict' in checkpoint:
-        model.mask_dict = checkpoint['mask_dict']
     # notify that we succesfully loaded the checkpoint
     if verbose:
         print(' --> loaded checkpoint of {name} from {path}'.format(name=name, path=model_dir))

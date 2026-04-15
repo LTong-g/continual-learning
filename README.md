@@ -8,8 +8,6 @@ following article:
 This repository mainly supports experiments in the *academic continual learning setting*, whereby
 a classification-based problem is split up into multiple, non-overlapping *contexts*
 (or *tasks*, as they are often called) that must be learned sequentially.
-Some support is also provided for running more flexible, "task-free" continual learning experiments
-with gradual transitions between contexts.
 
 
 ### Earlier version
@@ -40,37 +38,23 @@ chmod +x main*.py compare*.py all_results.sh
 ```
 
 
-## NeurIPS tutorial "Lifelong Learning Machines"
-This code repository is used for the
-[NeurIPS 2022 tutorial "Lifelong Learning Machines"](https://sites.google.com/view/neurips2022-llm-tutorial).
-For details and instructions on how to re-run the experiments presented in this tutorial,
-see the folder [NeurIPS-tutorial](NeurIPStutorial).
-
-
-## ICLR blog post "On the computation of the Fisher Information in continual learning"
-This repository is also used for the
-[ICLR 2025 blog post "On the computation of the Fisher Information in continual learning"](https://iclr-blogposts.github.io/2025/blog/fisher/).
-For details and instructions on how to re-run the experiments reported in this blog post,
-see the folder [ICLR-blogpost](ICLRblogpost).
-
-
 ## Demos
 ##### Demo 1: Single continual learning experiment
 ```bash
-./main.py --experiment=splitMNIST --scenario=task --si
+./main.py --experiment=splitMNIST --scenario=class --si
 ```
 This runs a single continual learning experiment:
-the method Synaptic Intelligence on the task-incremental learning scenario of Split MNIST
+the method Synaptic Intelligence on the class-incremental learning scenario of Split MNIST
 using the academic continual learning setting.
 Information about the data, the network, the training progress and the produced outputs is printed to the screen.
 Expected run-time on a standard desktop computer is ~6 minutes, with a GPU it is expected to take ~3 minutes.
 
 ##### Demo 2: Comparison of continual learning methods
 ```bash
-./compare.py --experiment=splitMNIST --scenario=task
+./compare.py --experiment=splitMNIST --scenario=class
 ```
 This runs a series of continual learning experiments,
-comparing the performance of various methods on the task-incremental learning scenario of Split MNIST.
+comparing the performance of various methods on the class-incremental learning scenario of Split MNIST.
 Information about the different experiments, their progress and 
 the produced outputs (e.g., a summary pdf) are printed to the screen.
 Expected run-time on a standard desktop computer is ~100 minutes, with a GPU it is expected to take ~45 minutes.
@@ -88,14 +72,12 @@ the experiments.
 #### Academic continual learning setting
 Custom individual experiments in the academic continual learning setting can be run with `main.py`.
 The main options of this script are:
-- `--experiment`: how to construct the context set? (`splitMNIST`|`permMNIST`|`CIFAR10`|`CIFAR100`)
+- `--experiment`: how to construct the context set? (`splitMNIST`|`CIFAR10`|`CIFAR100`)
 - `--contexts`: how many contexts?
-- `--scenario`: according to which scenario? (`task`|`domain`|`class`)
+- `--scenario`: according to which scenario? (`class`)
 
 To run specific methods, you can use the following:
-- Separate Networks: `./main.py --separate-networks`
-- Context-dependent-Gating (XdG): `./main.py --xdg`
-- Elastic Weight Consolidation (EWC): `./main.py --ewc` (read first: [ICLR-blogpost](ICLRblogpost/README.md))
+- Elastic Weight Consolidation (EWC): `./main.py --ewc` 
 - Synaptic Intelligence (SI): `./main.py --si`
 - Learning without Forgetting (LwF): `./main.py --lwf`
 - Functional Regularization Of the Memorable Past (FROMP): `./main.py --fromp`
@@ -115,20 +97,6 @@ The code supports combinations of several of the above methods.
 It is also possible to create custom approaches by mixing components of different methods,
 although not all possible combinations have been tested.
 
-#### More flexible, "task-free" continual learning experiments
-Custom individual experiments in a more flexible, "task-free" continual learning setting can be run with 
-`main_task_free.py`. The main options of this script are:
-- `--experiment`: how to construct the context set? (`splitMNIST`|`permMNIST`|`CIFAR10`|`CIFAR100`)
-- `--contexts`: how many contexts?
-- `--stream`: how to transition between contexts? (`fuzzy-boundaries`|`academic-setting`|`random`)
-- `--scenario`: according to which scenario? (`task`|`domain`|`class`)
-
-For information on further options: `./main_task_free.py -h`. This script supports several of the above 
-continual learning methods, but not (yet) all of them. Some methods have been slightly modified to 
-make them suitable for the absence of (known) context boundaries.
-In particular, methods that normally perform a certain consolidation operation at context boundaries, instead perform
-this consolidation operation every `X` iterations, whereby `X` is set with the option `--update-every`. 
-
 ## On-the-fly plots during training
 With this code progress during training can be tracked with on-the-fly plots. This feature requires `visdom`, 
 which can be installed as follows:
@@ -140,7 +108,7 @@ Before running the experiments, the visdom server should be started from the com
 python -m visdom.server
 ```
 The visdom server is now alive and can be accessed at `http://localhost:8097` in your browser (the plots will appear
-there). The flag `--visdom` should then be added when calling `./main.py` or `./main_task_free.py` to run the experiments with on-the-fly plots.
+there). The flag `--visdom` should then be added when calling `./main.py` to run the experiments with on-the-fly plots.
 
 For more information on `visdom` see <https://github.com/facebookresearch/visdom>.
 
